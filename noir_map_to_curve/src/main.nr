@@ -1,10 +1,19 @@
-use dep::std::field::bn254;
-use dep::std::hash::poseidon;
-use dep::std::hash::blake2s;
-use dep::std::hash::blake3;
-use dep::std::hash::pedersen_hash;
+// use dep::std::field::bn254;
+// use dep::std::hash::poseidon;
+// use dep::std::hash::blake2s;
+// use dep::std::hash::blake3;
+// use dep::std::hash::pedersen_hash;
 use dep::std::runtime::is_unconstrained;
 global T: Field = 256;
+
+global NON_NATIVE_T: FieldElement256 = FieldElement256 {
+    items: [
+        T, Field::from(0),
+        Field::from(0), Field::from(0),
+        Field::from(0), Field::from(0),
+        Field::from(0), Field::from(0),
+    ],
+};
 
 
 // ----- Here we deal with field representation and 
@@ -37,6 +46,11 @@ fn u32_arr_to_field_const(arr: [[u8; CHUNK_SIZE_BYTES]; NUM_CHUNKS]) -> FieldEle
         res.items[i] = Field::from_le_bytes::<4>(arr[i]);
     }
     res
+}
+
+// Returns the 0 element in your custom 256-bit field
+fn zero_fe() -> FieldElement256 {
+    FieldElement256 { items: [Field::from(0); NUM_CHUNKS] }
 }
 
 fn u32_arr_to_field_const257(arr: [[u8; CHUNK_SIZE_BYTES]; NUM_CHUNKS + 1]) -> FieldElement512Partial {
@@ -93,10 +107,10 @@ global mu_le_bytes = [
 
 // global p = FieldElement256 { 
 //     items: [
-//         Field::from(0xd87cfd47), Field::from(0x3c208c16), // limb0 (low, high)
-//         Field::from(0x6871ca8d), Field::from(0x97816a91), // limb1
-//         Field::from(0x8181585d), Field::from(0xb85045b6), // limb2
-//         Field::from(0xe131a029), Field::from(0x30644e72), // limb3
+//         Field::from(0xd87cfd47), Field::from(0x3c208c16), // chunk0 (low, high)
+//         Field::from(0x6871ca8d), Field::from(0x97816a91), // chunk1
+//         Field::from(0x8181585d), Field::from(0xb85045b6), // chunk2
+//         Field::from(0xe131a029), Field::from(0x30644e72), // chunk3
 //     ],
 // };
 global p = u32_arr_to_field_const(p_le_bytes);
@@ -212,7 +226,7 @@ fn is_greater_or_equal(a: FieldElement256, b: FieldElement256) -> bool {
     let mut result = false;
     let mut equal = true;
 
-    // Compare chunks starting from the most significant limb explicitly
+    // Compare chunks starting from the most significant chunk explicitly
     for j in 0..NUM_CHUNKS {
         let i = NUM_CHUNKS - 1 - j;
         result = result + (equal * (b.items[i].lt(a.items[i])));
@@ -225,7 +239,7 @@ fn is_greater_than(a: FieldElement256, b: FieldElement256) -> bool {
     let mut result = false;
     let mut equal = true;
 
-    // Compare chunks starting from the most significant limb explicitly
+    // Compare chunks starting from the most significant chunk explicitly
     for j in 0..NUM_CHUNKS {
         let i = NUM_CHUNKS - 1 - j;
         result = result + (equal * (b.items[i].lt(a.items[i])));
@@ -237,7 +251,7 @@ fn is_greater_than(a: FieldElement256, b: FieldElement256) -> bool {
 fn is_equal(a: FieldElement256, b: FieldElement256) -> bool {
     let mut equal = true;
 
-    // Compare chunks starting from the most significant limb explicitly
+    // Compare chunks starting from the most significant chunk explicitly
     for j in 0..NUM_CHUNKS {
         let i = NUM_CHUNKS - 1 - j;
         equal = equal * (a.items[i].eq(b.items[i]));
@@ -249,12 +263,20 @@ fn is_greater_than_512(a: FieldElement512, b: FieldElement512) -> bool {
     let mut result = false;
     let mut equal = true;
 
-    // Compare chunks starting from the most significant limb explicitly
-    for j in 0..NUM_CHUNKS*2 {
-        let i = (2 * NUM_CHUNKS) - 1 - j;
-        result = result + (equal * (b.items[i].lt(a.items[i])));
-        equal = equal * (a.items[i].eq(b.items[i]));
+    // Start from most significant chunk and descend to least significant chunk
+    for j in 0..(2 * NUM_CHUNKS) {
+        let i = (2 * NUM_CHUNKS - 1 - j);
+
+        let a_lt_b = a.items[i].lt(b.items[i]);  // a < b at chunk i
+        let b_lt_a = b.items[i].lt(a.items[i]);  // b < a at chunk i implies a > b at chunk i
+
+        // Update result ONLY if chunks were equal so far and now we find a > b.
+        result = result | (equal & b_lt_a);
+
+        // Update "equal" status for next chunk.
+        equal = equal & !(a_lt_b | b_lt_a);
     }
+
     result
 }
 
@@ -262,21 +284,29 @@ fn is_greater_than_eq_512(a: FieldElement512, b: FieldElement512) -> bool {
     let mut result = false;
     let mut equal = true;
 
-    // Compare chunks starting from the most significant limb explicitly
-    for j in 0..NUM_CHUNKS*2 {
-        let i = (2 * NUM_CHUNKS) - 1 - j;
-        result = result + (equal * (b.items[i].lt(a.items[i])));
-        equal = equal * (a.items[i].eq(b.items[i]));
+    
+    for j in 0..(2 * NUM_CHUNKS) {
+        // Go lower from most significant chunk
+        let i = (2 * NUM_CHUNKS - 1 - j);
+
+        let a_lt_b = a.items[i].lt(b.items[i]);
+        let b_lt_a = b.items[i].lt(a.items[i]);
+
+        result = result | (equal & b_lt_a);
+
+        equal = equal & !(a_lt_b | b_lt_a);
     }
-    result + equal
+
+    result | equal  // result or equal (since >= includes equality)
 }
+
 
 fn is_equal_512(a: FieldElement512, b: FieldElement512) -> bool {
     let mut equal = true;
 
-    // Compare chunks starting from the most significant limb explicitly
-    for j in 0..NUM_CHUNKS * 2 {
-        let i = NUM_CHUNKS * 2 - 1 - j;
+    // Compare chunks starting from the most significant chunk explicitly
+    for j in 0..2 * NUM_CHUNKS {
+        let i = 2 * NUM_CHUNKS - 1 - j;
         equal = equal * (a.items[i].eq(b.items[i]));
     }
     equal
@@ -367,25 +397,20 @@ fn add_512(a: FieldElement512, b: FieldElement512) -> (FieldElement512, Field) {
 // Inputs: a, b are in the Field  borrow_in is in {0,1}
 // Outputs: (chunk, borrow_out)
 fn sub_with_borrow_field_chunk_size(a: Field, b: Field, borrow_in: Field) -> (Field, Field) {
-    // Subtract two CHUNK_SIZE-bit integers with an incoming borrow bit
     let borrow_base = CARRY_BASE;
-    let intermediate = a - b - borrow_in;
+    let b_plus_borrow = b + borrow_in;
 
-    // If intermediate < 0 (in Field arithmetic), we underflowed.
-    // So we add back the base (2^CHUNK_SIZE), and set borrow_out = 1
-    let borrow_out = if intermediate.lt(Field::from(0)) { Field::from(1) } else { Field::from(0) };
-    let limb = if (borrow_out == Field::from(1)) {
-        intermediate + borrow_base
-    } else {
-        intermediate
-    };
+    let borrow_out = if a.lt(b_plus_borrow) { Field::from(1) } else { Field::from(0) };
 
-    // Constraints explicitly (Noir-friendly)
-    // assert((borrow_out * borrow_base + limb) == (a - b - borrow_in));
-    // assert((borrow_out == Field::from(0))+(borrow_out == Field::from(1)));
+    let chunk = a - b_plus_borrow + borrow_out * borrow_base;
 
-    (limb, borrow_out)
+    // Correctness constraints for sanity (Noir-friendly)
+    // assert(chunk + borrow_out * borrow_base == a - b - borrow_in);
+    // assert((borrow_out == Field::from(0)) + (borrow_out == Field::from(1)) == 1);
+
+    (chunk, borrow_out)
 }
+
 
 // Subtract two 256-bit integers
 
@@ -416,7 +441,7 @@ fn sub_field512(a: FieldElement512, b: FieldElement512) -> (FieldElement512, Fie
         res[i] = out.0;
         borrow = out.1;
     }
-    // At the end, borrow indicates if we underflowed the entire 256-bit number.
+    // At the end, borrow indicates if we underflowed the entire 512-bit number.
     // borrow = 0: a greater than eq to b
     // borrow = 1: a < b
     let res_field = FieldElement512 {
@@ -430,7 +455,7 @@ fn add_mod_p(a: FieldElement256, b: FieldElement256) -> FieldElement256 {
     let mut res = [Field::from(0); NUM_CHUNKS];
     let mut carry = Field::from(0);
 
-    // Step 1: Explicit limb-wise addition with carry
+    // Step 1: Explicit chunk-wise addition with carry
 
 
     for i in 0..NUM_CHUNKS {
@@ -496,13 +521,13 @@ fn sub_mod_p(a: FieldElement256, b: FieldElement256) -> FieldElement256 {
 
 fn mul_field32(a: Field, b: Field) -> (Field, Field) {
     let product: Field = a * b;
-    let prod_u128: U128 = field_to_u128(product);
+    let prod_u128: U128 = unsafe{ field_to_u128(product)} ;
     
     // Use the unconstrained split function.
-    let (lo_u128, hi_u128) = split_u128(prod_u128);
+    let (lo_u128, hi_u128) = unsafe{ split_u128(prod_u128) };
     
-    let lo: Field = field_from_u128(lo_u128);
-    let hi: Field = field_from_u128(hi_u128);
+    let lo: Field = unsafe{ field_from_u128(lo_u128) };
+    let hi: Field = unsafe{ field_from_u128(hi_u128) };
     
     assert( hi * CHUNK_MOD + lo == product );
     
@@ -511,15 +536,15 @@ fn mul_field32(a: Field, b: Field) -> (Field, Field) {
 
 
 
-fn mul_limbs_8x8(a: FieldElement256, b: FieldElement256) -> FieldElement512 {
+fn mul_chunks_8x8(a: FieldElement256, b: FieldElement256) -> FieldElement512 {
     let mut out = FieldElement512 {
         items: [Field::from(0); 2 * NUM_CHUNKS]
     };
 
-    // Outer loops: multiply each limb from a and b.
+    // Outer loops: multiply each chunk from a and b.
     for i in 0..NUM_CHUNKS {
         for j in 0..NUM_CHUNKS {
-            // Multiply a limb from a and b (32x32 = 64 bits).
+            // Multiply a chunk from a and b (32x32 = 64 bits).
             let (lo, hi) = mul_field32(a.items[i], b.items[j]);
             
             // Add the product into the appropriate positions in out.
@@ -548,9 +573,9 @@ fn mul_limbs_8x8(a: FieldElement256, b: FieldElement256) -> FieldElement512 {
     out
 }
 
-fn mul_limbs_9x9(a: FieldElement512Partial, b: FieldElement512Partial) -> FieldElement512 {
+fn mul_chunks_9x9(a: FieldElement512Partial, b: FieldElement512Partial) -> FieldElement512 {
     let mut out = FieldElement512 {
-        items: [Field::from(0); 2 * NUM_CHUNKS] // Or 17 limbs if needed
+        items: [Field::from(0); 2 * NUM_CHUNKS] // Or 17 chunks if needed
     };
 
     for i in 0..(NUM_CHUNKS + 1) {
@@ -606,14 +631,14 @@ fn div_by_two(a: FieldElement256) -> FieldElement256 {
     let mut result = FieldElement256 { items: [Field::from(0); NUM_CHUNKS] };
     let mut carry = Field::from(0);
 
-    // Process limbs in descending order.
+    // Process chunks in descending order.
     for i in 0..NUM_CHUNKS {
-        // Compute index in reverse order: highest limb first.
+        // Compute index in reverse order: highest chunk first.
         let j = (NUM_CHUNKS - 1 - i);
         // current = (carry * BASE) + a.items[j]
         let current = carry * CARRY_BASE + a.items[j];
         // Use the helper to compute quotient q and remainder r when dividing current by 2.
-        let (q, r) = div_by_two_helper(current);
+        let (q, r) = unsafe { div_by_two_helper(current) };
         result.items[j] = q;
         carry = r;
     }
@@ -628,38 +653,36 @@ unconstrained fn basic_reduce(x: FieldElement512) -> (FieldElement256, FieldElem
     let mut low = FieldElement256 {
         items: [Field::from(0); NUM_CHUNKS]
     };
-    let mut mid = div_by_two(high);
     let mut q = FieldElement256 {
         items: [Field::from(0); NUM_CHUNKS]
     };
     let mut r = FieldElement256 {
         items: [Field::from(0); NUM_CHUNKS]
     };
-    for i in 0..NUM_BITS {
-        // If p * low <= x and low = high, then we can stop
-        let prod_low = mul_limbs_8x8(low, p);
+    let mut done: bool = false;
+    for _ in 0..NUM_BITS {
+        let mid = div_by_two(add_256(low, high).0);
+        let prod_mid = mul_chunks_8x8(mid, p);
         let (mid_plus_one, _): (FieldElement256, Field) = add_256(mid, ONE_P);
-        let prod_next = mul_limbs_8x8(mid_plus_one, p);
-        
-        if (is_greater_than_eq_512(x, prod_low) & is_greater_than_512(prod_next, x)) {
-            // If (low + 1) * p > x >= p * low, then we can stop
-            q = low;
-            let out = sub_field512(x, prod_low);
-            r = field512_to_256(out.0); 
-        } else if is_greater_than_eq_512(x, prod_next) {
-            // This is the case where we search the higher half 
-            low = mid_plus_one;
-            let out = add_256(mid, high);
-            mid = div_by_two(out.0); 
+        let prod_next = mul_chunks_8x8(mid_plus_one, p);
+        if !done {
+            if (is_greater_than_eq_512(x, prod_mid) & is_greater_than_512(prod_next, x)) {
+                // If (mid + 1) * p > x >= p * mid, then we can stop
+                q = mid;
+                let out = sub_field512(x, prod_mid);
+                r = field512_to_256(out.0); 
+                done = true;
+            } else if is_greater_than_eq_512(x, prod_next) {
+                // This is the case where we search the higher half 
+                low = mid_plus_one;
+            }
+            else {
+                // This is the case where we search the lower half
+                high = mid;
+            }  
         }
-        else {
-            // This is the case where we search the lower half
-            high = mid;
-            let out = add_256(low, mid);
-            mid = div_by_two(out.0);
-        }  
-        
     }
+    
     (q, r)
 }
 
@@ -668,27 +691,27 @@ unconstrained fn basic_reduce(x: FieldElement512) -> (FieldElement256, FieldElem
 
 
 fn barrett_reduce(x: FieldElement512) -> FieldElement256 {
-    // Step 1: Extract the top (NUM_CHUNKS+1) limbs from x.
+    // Step 1: Extract the top (NUM_CHUNKS+1) chunks from x.
     let mut x_high = FieldElement512Partial { 
         items: [Field::from(0); NUM_CHUNKS + 1] 
     };
-    // We take limbs from index (NUM_CHUNKS - 1) up through the end.
+    // We take chunks from index (NUM_CHUNKS - 1) up through the end.
     for i in 0..(NUM_CHUNKS + 1) {
         x_high.items[i] = x.items[i + NUM_CHUNKS - 1];
     };
 
     // Step 2: Compute q_full = x_high * mu using our fixed 9x9 multiplication.
-    let q_full = mul_limbs_9x9(x_high, MU); // q_full is assumed to be a FieldElement512
+    let q_full = mul_chunks_9x9(x_high, MU); // q_full is assumed to be a FieldElement512
     let mut q = FieldElement256 { 
         items: [Field::from(0); NUM_CHUNKS] 
     };
-    // We take the upper NUM_CHUNKS limbs of q_full (i.e. indices NUM_CHUNKS..2*NUM_CHUNKS).
+    // We take the upper NUM_CHUNKS chunks of q_full (i.e. indices NUM_CHUNKS..2*NUM_CHUNKS).
     for i in 0..NUM_CHUNKS {
         q.items[i] = q_full.items[i + NUM_CHUNKS];
     };
 
     // Step 3: Compute r = x - q * p.
-    let qp = mul_limbs_8x8(q, p); // qp is a FieldElement512.
+    let qp = mul_chunks_8x8(q, p); // qp is a FieldElement512.
     let mut r = FieldElement512 { 
         items: [Field::from(0); 2 * NUM_CHUNKS] 
     };
@@ -699,7 +722,7 @@ fn barrett_reduce(x: FieldElement512) -> FieldElement256 {
         borrow = new_borrow;
     };
 
-    // Step 4: Let r_lo be the lower NUM_CHUNKS limbs of r.
+    // Step 4: Let r_lo be the lower NUM_CHUNKS chunks of r.
     let mut r_lo = FieldElement256 { 
         items: [Field::from(0); NUM_CHUNKS] 
     };
@@ -727,7 +750,7 @@ fn barrett_reduce(x: FieldElement512) -> FieldElement256 {
 
 fn mul_mod_p(a: FieldElement256, b: FieldElement256) -> FieldElement256 {
     // Step 1: full 512-bit product
-    let product = mul_limbs_8x8(a, b);
+    let product = mul_chunks_8x8(a, b);
     if is_greater_than_512(p_512, product) {
         // If product is less than p, we can return it directly
         field512_to_256(product)
@@ -735,8 +758,8 @@ fn mul_mod_p(a: FieldElement256, b: FieldElement256) -> FieldElement256 {
     else {
         // let reduced = barrett_reduce(product);
         // Step 2: Simple reduction mod p
-        let (q, r): (FieldElement256, FieldElement256) = basic_reduce(product);
-        let out = add_512(mul_limbs_8x8(q, p), field256_to_512(r));
+        let (q, r): (FieldElement256, FieldElement256) = unsafe { basic_reduce(product) };
+        let out = add_512(mul_chunks_8x8(q, p), field256_to_512(r));
         assert(is_equal_512(out.0, product));
         
         r
@@ -755,11 +778,11 @@ unconstrained fn get_inv_mod_p(a: FieldElement256) -> FieldElement256 {
     let mut base = a;
     
     for bit_index in 0..NUM_BITS {
-        let limb_index = bit_index / CHUNK_SIZE;
+        let chunk_index = bit_index / CHUNK_SIZE;
         let bit_offset = bit_index % CHUNK_SIZE;
         // Extract the bit at bit_index from a
         let bit_mask = field_from_u128(shift_left_u128(U128::from_integer(1), bit_offset as u64));
-        let is_one = (P_MINUS_2.items[limb_index].mul(bit_mask)) / bit_mask;
+        let is_one = (P_MINUS_2.items[chunk_index].mul(bit_mask)) / bit_mask;
 
         let should_multiply = is_one;
         if should_multiply == Field::from(0) {
@@ -782,18 +805,18 @@ unconstrained fn get_inv_mod_p(a: FieldElement256) -> FieldElement256 {
     result
 }
 
-fn inv_mod_p(a: FieldElement256) -> FieldElement256 {
-    let a_inv = unsafe { get_inv_mod_p(a) };
-    assert(is_equal(mul_mod_p(a, a_inv), ONE_P));
-    a_inv
-}
+// fn inv_mod_p(a: FieldElement256) -> FieldElement256 {
+//     let a_inv = unsafe { get_inv_mod_p(a) };
+//     assert(is_equal(mul_mod_p(a, a_inv), ONE_P));
+//     a_inv
+// }
 
-fn div_mod_p(a: FieldElement256, b: FieldElement256) -> FieldElement256 {
-    let b_inv = inv_mod_p(b);
-    let res = mul_mod_p(a, b_inv);
-    assert(is_equal(mul_mod_p(a, b), mul_mod_p(res, b)));
-    res
-}
+// fn div_mod_p(a: FieldElement256, b: FieldElement256) -> FieldElement256 {
+//     let b_inv = inv_mod_p(b);
+//     let res = mul_mod_p(a, b_inv);
+//     assert(is_equal(mul_mod_p(a, b), mul_mod_p(res, b)));
+//     res
+// }
 
 
 // ------ Now that we have all the field items, 
@@ -803,29 +826,177 @@ fn div_mod_p(a: FieldElement256, b: FieldElement256) -> FieldElement256 {
 struct ECPoint {
     x: FieldElement256,
     y: FieldElement256,
-    infinity: bool,
 }
+
+// Example elliptic curve parameters for a short Weierstrass form: y^2 = x^3 + A*x + B mod P
+// Adjust these for the actual curve you want to work with:
+global A = 0; // Example: A = 0
+global B = 3; // Example: B = 3 (like bn254's B)
+
+
+// Example A coefficient for the curve y^2 = x^3 + A*x + B.
+fn curve_A() -> FieldElement256 {
+    let mut fe = zero_fe();
+    fe.items[0] = A; 
+    fe
+}
+
+// Example B coefficient if needed in a circuit check
+fn curve_B() -> FieldElement256 {
+    // If B = 3, for instance, that means each chunk is zero except maybe the first is 3
+    
+    let mut fe = zero_fe();
+    fe.items[0] = B; 
+    fe
+}
+
+
+
+
 
 // ------ Additional operations we might require for this field ------ // 
 // Hash function over the above curve -- do we need this?
 // Checking for map-to-curve constraints
 
+fn check_nonnative_map_to_curve_constraints(m: FieldElement256, x: FieldElement256, y: FieldElement256, z: FieldElement256, t: FieldElement256) -> bool {
+    // let cond_1 = (x == (t + m * T));
+    let m_times_t = mul_mod_p(m, NON_NATIVE_T);
+    let t_plus_m_times_t = add_mod_p(t, m_times_t);
+    let cond_1 = is_equal(x, t_plus_m_times_t);
+    let z_sq = mul_mod_p(z, z);
+
+    let cond_2 = is_equal(y, z_sq);
+    
+    let x_sq = mul_mod_p(x, x);
+    // let f_x = (x_sq * x) + 3;
+    let f_x = add_mod_p(mul_mod_p(x_sq, x), curve_B());
+    
+    let y_sq = mul_mod_p(y, y);
+    
+
+    let cond_3 = is_equal(y_sq, f_x);
+
+    cond_1 * cond_2 * cond_3
+    
+}
 
 
 // // #[field(bn254)]
-fn main(m: Field) {
-    print("m =");
-    print(m);
-    // let one: Field = 1;//Field::from(1);
-    let one = Field::from(1);
-    // let zero: Field = 0;//Field::from(0);
-    let zero = Field::from(0);
-    let minus_one = (zero - one);
-    print("minus_one = ");  
-    print(minus_one);
-    assert(m == one);
+fn main(m: FieldElement256, x: FieldElement256, y: FieldElement256, z: FieldElement256, t: FieldElement256) {
+    let check = check_nonnative_map_to_curve_constraints(m, x, y, z, t);
+    assert(check);
 }    
 
+// ----- Elliptic curve point operations ----- //
+
+
+/// Check if a point is the "infinity point." 
+/// In affine coordinates, we don't have a formal "point at infinity," 
+/// so we'll treat (0, 0) as a placeholder.
+fn is_infinity(point: ECPoint) -> bool {
+    is_equal(point.x, FieldElement256 { items: [Field::from(0); NUM_CHUNKS] }) &
+    is_equal(point.y, FieldElement256 { items: [Field::from(0); NUM_CHUNKS] })
+}
+
+
+// /// Elliptic-curve addition: R = point_p + point_q
+// /// (using short Weierstrass formulas in affine coords).
+// fn point_add(point_p: ECPoint, point_q: ECPoint) -> ECPoint {
+//     // 1) Handle "point at infinity" shortcuts
+//     if is_infinity(point_p) {
+//         point_q
+//     }
+//     if is_infinity(point_q) {
+//         point_p
+//     }
+
+//     // 2) If x_p == x_q but y_p != y_q => result = infinity
+//     if is_equal(point_p.x, point_q.x) & !is_equal(point_p.y, point_q.y) {
+//         ECPoint { x: zero_fe(), y: zero_fe() }
+//     }
+
+//     // 3) lambda = (y_q - y_p) / (x_q - x_p) mod p
+//     let y_diff = sub_mod_p(point_q.y, point_p.y);
+//     let x_diff = sub_mod_p(point_q.x, point_p.x);
+//     let lambda = div_mod_p(y_diff, x_diff);
+
+//     // 4) x_r = lambda^2 - x_p - x_q
+//     let lambda_sq = mul_mod_p(lambda, lambda);
+//     let t1 = sub_mod_p(lambda_sq, point_p.x);
+//     let x_r = sub_mod_p(t1, point_q.x);
+
+//     // 5) y_r = lambda * (x_p - x_r) - y_p
+//     let x_p_minus_x_r = sub_mod_p(point_p.x, x_r);
+//     let t2 = mul_mod_p(lambda, x_p_minus_x_r);
+//     let y_r = sub_mod_p(t2, point_p.y);
+
+//     ECPoint { x: x_r, y: y_r }
+// }
+
+
+// /// Elliptic-curve doubling: R = 2 * point_p
+// fn point_double(point_p: ECPoint) -> ECPoint {
+//     // 1) Handle infinity
+//     if is_infinity(point_p) {
+//         point_p
+//     }
+
+//     // 2) If y = 0 => vertical tangent => infinity
+//     if is_equal(point_p.y, zero_fe()) {
+//         ECPoint { x: zero_fe(), y: zero_fe() }
+//     }
+
+//     // 3) lambda = (3*x_p^2 + A) / (2*y_p)
+//     let three = {
+//         let mut fe = zero_fe();
+//         fe.items[0] = Field::from(3);
+//         fe
+//     };
+//     let two = {
+//         let mut fe = zero_fe();
+//         fe.items[0] = Field::from(2);
+//         fe
+//     };
+
+//     let px_sq = mul_mod_p(point_p.x, point_p.x);         // x_p^2
+//     let three_px_sq = mul_mod_p(three, px_sq);           // 3*x_p^2
+//     let A = curve_A();                                   // A from your curve
+//     let numerator = add_mod_p(three_px_sq, A);           // 3*x_p^2 + A
+
+//     let two_py = mul_mod_p(two, point_p.y);              // 2*y_p
+//     let lambda = div_mod_p(numerator, two_py);           // (3*x_p^2 + A)/(2*y_p)
+
+//     // 4) x_r = lambda^2 - 2*x_p
+//     let lambda_sq = mul_mod_p(lambda, lambda);
+//     let two_px = mul_mod_p(two, point_p.x);
+//     let x_r = sub_mod_p(lambda_sq, two_px);
+
+//     // 5) y_r = lambda*(x_p - x_r) - y_p
+//     let x_p_minus_x_r = sub_mod_p(point_p.x, x_r);
+//     let t1 = mul_mod_p(lambda, x_p_minus_x_r);
+//     let y_r = sub_mod_p(t1, point_p.y);
+
+//     ECPoint { x: x_r, y: y_r }
+// }
+
+// /// Naive scalar multiplication using repeated add/double.
+// /// For performance, you'd typically use double-and-add, but here is a simple version.
+// fn point_scalar_mul(point_p: ECPoint, scalar: u64) -> ECPoint {
+//     // We treat the "result" as infinity initially
+//     let mut result = ECPoint { x: zero_fe(), y: zero_fe() };
+//     let mut base = point_p;
+
+//     // Example of doing a 64-bit naive loop. If you need 256-bit scalar exponents,
+//     // you'd want to parse them into something bigger than u64 and loop more carefully.
+//     for i in 0..64 {
+//         let bit = (scalar >> i) & 1;
+//         if bit == 1 {
+//             result = point_add(result, base);
+//         }
+//         base = point_double(base);
+//     }
+//     result
+// }
 
 // --------- The code below is the original code that we had for a native field --------- //
 
@@ -926,6 +1097,48 @@ fn test_is_equal() {
     }));
 }
 
+#[test] 
+fn test_is_equal512() {
+    let a = FieldElement512 {
+        items: [
+            Field::from(1), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+        ],
+    };
+
+    let b = FieldElement512 {
+        items: [
+            Field::from(1), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+        ],
+    };
+
+    assert(is_equal_512(a, b));
+    assert(!is_equal_512(a, FieldElement512 {
+        items: [
+            Field::from(2), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+            Field::from(0), Field::from(0),
+        ],
+    }));
+}
 
 #[test]
 fn test_nonnative_simple_add() {
@@ -1068,7 +1281,7 @@ fn test_8x8_mul() {
         ],
     };
 
-    let prod: FieldElement512 = mul_limbs_8x8(one, two);
+    let prod: FieldElement512 = mul_chunks_8x8(one, two);
 
     assert(is_equal_512(prod, two_512));
 }
@@ -1106,7 +1319,7 @@ fn test_9x9_mul() {
             Field::from(0), Field::from(0),
         ],
     };
-    let prod: FieldElement512 = mul_limbs_9x9(one, two);
+    let prod: FieldElement512 = mul_chunks_9x9(one, two);
     assert(is_equal_512(prod, two_512));
 }
 
@@ -1165,4 +1378,18 @@ fn test_mul_mod_p() {
 
     let prod: FieldElement256 = mul_mod_p(minus_one, minus_two);
     assert(is_equal(prod, two));
+}
+
+#[test]
+fn test_is_infinity() {
+    let inf = ECPoint { x: zero_fe(), y: zero_fe() };
+    assert(is_infinity(inf), "Expected (0,0) to be infinity.");
+
+    // A dummy point with x != 0 or y != 0
+    // (In practice, you'll construct FieldElement256 properly.)
+    let non_inf = ECPoint {
+        x: zero_fe(),
+        y: curve_B()/* some non-zero FieldElement256 */,
+    };
+    assert(!is_infinity(non_inf), "Expected non_inf to not be infinity.");
 }
