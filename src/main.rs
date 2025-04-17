@@ -3,11 +3,11 @@ use std::time::Instant;
 
 use ark_ec::{twisted_edwards::Projective, AdditiveGroup, AffineRepr, CurveGroup, PrimeGroup, VariableBaseMSM};
 use ark_ff::{BigInt, BigInteger256, Field, FpConfig, PrimeField};
-use ark_bn254::{G1Projective as G, G1Affine as GAffine, Fr as ScalarField};
-// use ark_grumpkin::{Projective as G, Affine as GAffine, Fr as ScalarField};
+// use ark_bn254::{G1Projective as G, G1Affine as GAffine, Fr as ScalarField};
+use ark_grumpkin::{Projective as G, Affine as GAffine, Fr as ScalarField};
 use ark_std::{Zero, UniformRand};
 
-const CONST: i64 = 3;//-17;
+const CONST: i64 = -17;
 
 pub trait FromScaler: CurveGroup {
     fn scaler_to_curve_elt(x: Self::BaseField) -> Option<Self::Affine>;
@@ -98,6 +98,7 @@ impl FromScaler for G {
                 let out = Self::Affine::new_unchecked(x_base, y_base);
                 let z = y.unwrap().sqrt();
                 if z.is_some() {
+                    println!("out on curve = {:?}", out.is_on_curve());
                     return Some((out, z.unwrap(), field_t));
                 }
                 little_t += 1;
@@ -162,44 +163,60 @@ fn print_fq_hex_u32x8<F: PrimeField>(fe: F) {
     print!("]");
 }
 
+fn print_native_witness<G: CurveGroup>(msg: G::BaseField, mapped_item: Option<(G::Affine, G::BaseField, G::BaseField)>) {
+    println!("m = \"{:?}\"", msg);
+    if mapped_item.is_some() {
+        let item = mapped_item.unwrap();
+        let x = item.0.x().unwrap();
+        let y = item.0.y().unwrap();
+        let z = item.1;
+        let t = item.2;
+        println!("x = \"{:?}\"", x);
+        println!("y = \"{:?}\"", y);
+        println!("z = \"{:?}\"", z);
+        println!("t = \"{:?}\"", t);
+    }
+}
+
 fn main() {
     
     let start = Instant::now();
     let mut total = 0;
-    for i in (1<<3)..(1<<3 + 1) {
+    for i in (1<<3)..((1<<3) + 1) {
         let x = <G as CurveGroup>::BaseField::from(i);
       
         let mapped_item = G::map_to_curve(x, 256);
-        println!("msg: {:?}", i);
-        println!("Multi try: {:?}", mapped_item);
+        print_native_witness::<G>(x, mapped_item);
+        
+        // println!("msg: {:?}", i);
+        // println!("Multi try: {:?}", mapped_item);
         let curve_item = mapped_item.unwrap().0;
         let z_val = mapped_item.unwrap().1;
         let little_t = mapped_item.unwrap().2;
-        println!("Z square = {:?}", z_val.square());
-        println!("y_sq = {:?}", curve_item.y.square());
-        println!("x_cube + {:?} = {:?}", CONST, curve_item.x.square() * curve_item.x + <G as CurveGroup>::BaseField::from(CONST));
+        // println!("Z square = {:?}", z_val.square());
+        // println!("y_sq = {:?}", curve_item.y.square());
+        // println!("x_cube + {:?} = {:?}", CONST, curve_item.x.square() * curve_item.x + <G as CurveGroup>::BaseField::from(CONST));
         
         
         assert!(z_val.square() == curve_item.y);
         assert!(curve_item.is_on_curve());
-
-        print!("[m]\n");
+        println!("****************************************");
+        println!("[m]");
         print!("items = ");
         print_fq_hex_u32x8(x);
         print!("\n");
-        print!("[x]\n");
+        println!("[x]");
         print!("items = ");
         print_fq_hex_u32x8(curve_item.x);
         print!("\n");
-        print!("[y]\n");
+        println!("[y]");
         print!("items = ");
         print_fq_hex_u32x8(curve_item.y);
-        print!("\n");
-        print!("[z]\n");
+        println!("[z]");
         print!("items = ");
         print_fq_hex_u32x8(z_val);
         print!("\n");
-        print!("[t]\n");
+        println!("[t]");
         print!("items = ");
         print_fq_hex_u32x8(little_t);
 
