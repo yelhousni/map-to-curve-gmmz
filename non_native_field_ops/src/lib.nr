@@ -1,5 +1,4 @@
-use dep::std::runtime::is_unconstrained;
-global T: Field = 256;
+pub global T: Field = 256;
 
 global NON_NATIVE_T: FieldElement256 = FieldElement256 {
     items: [
@@ -20,9 +19,9 @@ global NUM_CHUNKS: u32 = 8;
 global CHUNK_SIZE: u32 = 32;
 global CHUNK_SIZE_BYTES: u32 = CHUNK_SIZE / 8;
 global NUM_BITS: u32 = 256;
-global CHUNK_MOD: Field = field_from_u64(1 << CHUNK_SIZE as u8);
+global CHUNK_MOD: Field = field_from_u64(1u64 << (CHUNK_SIZE as u64));
 
-global CARRY_BASE: Field = field_from_u64(1 << CHUNK_SIZE as u8);
+global CARRY_BASE: Field = field_from_u64(1u64 << (CHUNK_SIZE as u64));
 global M: u32 = NUM_CHUNKS / 2;
 global M2: u32 = M + 1; // 5
 
@@ -30,7 +29,7 @@ global M2: u32 = M + 1; // 5
 // p = 21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
 pub struct FieldElement256 {
-    items: [Field; NUM_CHUNKS],
+    pub items: [Field; NUM_CHUNKS],
 }
 
 pub struct FieldElement512 {
@@ -190,78 +189,66 @@ unconstrained fn field_from_u64(x: u64) -> Field {
     Field::from_le_bytes(bytes)
 }
 
-unconstrained fn field_to_u128(x: Field) -> U128 {
-    let s = U128::from_integer(x);
-
-    s
+unconstrained fn field_to_u128(x: Field) -> u128 {
+    x as u128
 }
 
-unconstrained fn field_from_u128(x: U128) -> Field {
-    x.to_integer()
+unconstrained fn field_from_u128(x: u128) -> Field {
+    x as Field
 }
 
-unconstrained fn split_u128(x: U128) -> (U128, U128) {
-    let chunk_mod_128 = U128::from_integer(1) << 32;
+unconstrained fn split_u128(x: u128) -> (u128, u128) {
+    let chunk_mod_128: u128 = 1u128 << 32u128;
     let lo = x % chunk_mod_128;
     let hi = x / chunk_mod_128;
     (lo, hi)
 }
 
-unconstrained fn shift_right_u128(x: U128, s: u64) -> U128 {
-    // Decompose the shift: how many whole bytes and a remainder (in bits)
+unconstrained fn shift_right_u128(x: u128, s: u64) -> u128 {
     let num_shifts: u64 = s / 8;
     let rem: u8 = (s % 8) as u8;
-    let mut result: U128 = x;
-    // We unroll the loop to a fixed length (here, 16 iterations, which is safe since 16*8 = 128)
+    let mut result: u128 = x;
     for i in 0..16 {
         if i < num_shifts {
-            result = result >> 8;
+            result = result >> 8u128;
         }
     }
-    // Then shift by the remaining bits (rem < 8, so this shift is allowed)
-    result = result >> rem;
+    result = result >> (rem as u128);
     result
 }
 
-unconstrained fn shift_left_u128(x: U128, s: u64) -> U128 {
-    // Decompose the shift: how many whole bytes and a remainder (in bits)
+unconstrained fn shift_left_u128(x: u128, s: u64) -> u128 {
     let num_shifts: u64 = s / 8;
     let rem: u8 = (s % 8) as u8;
-    let mut result: U128 = x;
-    let u128_256 = U128::from_integer(256);
-    // We unroll the loop to a fixed length (here, 16 iterations, which is safe since 16*8 = 128)
+    let mut result: u128 = x;
+    let u128_256: u128 = 256;
     for i in 0..16 {
         if i < num_shifts {
             result = result * u128_256;
         }
     }
-    // Then shift by the remaining bits (rem < 8, so this shift is allowed)
-    result = result << rem;
+    result = result << (rem as u128);
     result
 }
 
 fn is_greater_or_equal(a: FieldElement256, b: FieldElement256) -> bool {
     let mut result = false;
     let mut equal = true;
-
-    // Compare chunks starting from the most significant chunk explicitly
     for j in 0..NUM_CHUNKS {
         let i = NUM_CHUNKS - 1 - j;
-        result = result + (equal * (b.items[i].lt(a.items[i])));
-        equal = equal * (a.items[i].eq(b.items[i]));
+        result = result | (equal & b.items[i].lt(a.items[i]));
+        equal = equal & a.items[i].eq(b.items[i]);
     }
-    result + equal
+    result | equal
 }
 
 fn is_greater_than(a: FieldElement256, b: FieldElement256) -> bool {
     let mut result = false;
     let mut equal = true;
-
-    // Compare chunks starting from the most significant chunk explicitly
     for j in 0..NUM_CHUNKS {
         let i = NUM_CHUNKS - 1 - j;
-        result = result + (equal * (b.items[i].lt(a.items[i])));
-        equal = equal * (a.items[i].eq(b.items[i]));
+        result = result | (equal & b.items[i].lt(a.items[i]));
+        equal = equal & a.items[i].eq(b.items[i]);
     }
     result
 }
@@ -272,7 +259,7 @@ pub fn is_equal(a: FieldElement256, b: FieldElement256) -> bool {
     // Compare chunks starting from the most significant chunk explicitly
     for j in 0..NUM_CHUNKS {
         let i = NUM_CHUNKS - 1 - j;
-        equal = equal * (a.items[i].eq(b.items[i]));
+        equal = equal & a.items[i].eq(b.items[i]);
     }
     equal
 }
@@ -323,7 +310,7 @@ fn is_equal_512(a: FieldElement512, b: FieldElement512) -> bool {
     // Compare chunks starting from the most significant chunk explicitly
     for j in 0..2 * NUM_CHUNKS {
         let i = 2 * NUM_CHUNKS - 1 - j;
-        equal = equal * (a.items[i].eq(b.items[i]));
+        equal = equal & a.items[i].eq(b.items[i]);
     }
     equal
 }
@@ -533,7 +520,7 @@ fn sub_mod_p(a: FieldElement256, b: FieldElement256) -> FieldElement256 {
 
 fn mul_field32(a: Field, b: Field) -> (Field, Field) {
     let product: Field = a * b;
-    let prod_u128: U128 = unsafe { field_to_u128(product) };
+    let prod_u128: u128 = unsafe { field_to_u128(product) };
 
     // Use the unconstrained split function.
     let (lo_u128, hi_u128) = unsafe { split_u128(prod_u128) };
@@ -969,7 +956,7 @@ fn mul_chunks_9x9(a: FieldElement512Partial, b: FieldElement512Partial) -> Field
 // This unconstrained helper divides a u64 (provided as a Field) by 2,
 // returning the quotient and remainder as Field values.
 unconstrained fn div_by_two_helper(current: Field) -> (Field, Field) {
-    let current_bits: [u1; 32] = current.to_le_bits();
+    let current_bits: [u1; 33] = current.to_le_bits();
     let r_bits = current_bits[0];
     let r_field = if r_bits == 1 {
         Field::from(1)
@@ -1034,7 +1021,7 @@ unconstrained fn basic_reduce(x: FieldElement512) -> (FieldElement256, FieldElem
 // Let's just binary search for the quotient q and remainder r such that pq + r = x
 unconstrained fn arithmetic_div_chunk_size(dividend: Field) -> (Field, Field) {
     let numerator_u128 = unsafe { field_to_u128(dividend) };
-    let q = numerator_u128 >> (CHUNK_SIZE as u8);
+    let q = numerator_u128 >> (CHUNK_SIZE as u128);
     let quotient = unsafe { field_from_u128(q) };
     let remainder = dividend - (quotient * CARRY_BASE);
     (quotient, remainder)
@@ -1143,8 +1130,8 @@ pub unconstrained fn get_inv_mod_p(a: FieldElement256) -> FieldElement256 {
         let chunk_index = bit_index / CHUNK_SIZE;
         let bit_offset = bit_index % CHUNK_SIZE;
         // Extract the bit at bit_index from a
-        let bit_mask = field_from_u128(shift_left_u128(U128::from_integer(1), bit_offset as u64));
-        let is_one = (P_MINUS_2.items[chunk_index].mul(bit_mask)) / bit_mask;
+        let bit_mask = field_from_u128(shift_left_u128(1, bit_offset as u64));
+        let is_one = (P_MINUS_2.items[chunk_index] * bit_mask) / bit_mask;
 
         let should_multiply = is_one;
         if should_multiply == Field::from(0) {
@@ -1236,7 +1223,7 @@ pub fn check_nonnative_map_to_curve_constraints(
 
     let cond_3 = is_equal(y_sq, f_x);
 
-    cond_1 * cond_2 * cond_3
+    cond_1 & cond_2 & cond_3
 }
 
 // // // #[field(bn254)]
