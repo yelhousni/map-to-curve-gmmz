@@ -37,6 +37,20 @@ fn exploit_missing_range_check_nonnative() {
 }
 
 // ================================================================
+// EXPLOIT: m=0 claims any valid curve point (nonnative)
+// ================================================================
+#[test]
+fn exploit_zero_message_nonnative() {
+    let x = fe256(1792, 0, 0, 0, 0, 0, 0, 0);
+    let y = fe256(572898347, 1394700396, 437080213, 4012180472,
+                  3757856850, 1410540546, 3929418899, 82440946);
+    let z = fe256(1662833629, 1544638068, 1841881003, 3246470374,
+                  3394126905, 79692451, 3209578632, 10265587);
+    assert(check_nonnative_map_to_curve_constraints(7, x, y, z, 0));
+    assert(check_nonnative_map_to_curve_constraints(0, x, y, z, 1792));
+}
+
+// ================================================================
 // EXPLOIT 2: Automorphism with FieldElement256 limbs
 // ================================================================
 #[test]
