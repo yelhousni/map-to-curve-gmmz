@@ -145,3 +145,70 @@ fn exploit_zero_message_claims_any_point() {
     // m=0 stole m=7's curve point
     assert(0 != 7);
 }
+
+// ================================================================
+// Grumpkin affine addition
+// ================================================================
+fn grumpkin_add(x1: Field, y1: Field, x2: Field, y2: Field) -> (Field, Field) {
+    let lam = (y2 - y1) / (x2 - x1);
+    let x3 = lam * lam - x1 - x2;
+    let y3 = lam * (x1 - x3) - y1;
+    (x3, y3)
+}
+
+// Accumulate: verify map-to-curve then add to running digest
+fn accumulate(
+    digest_x: Field, digest_y: Field,
+    m: Field, x: Field, y: Field, z: Field, t: Field
+) -> (Field, Field) {
+    assert(check_map_to_curve_constraints(m, x, y, z, t));
+    grumpkin_add(digest_x, digest_y, x, y)
+}
+
+// ================================================================
+// EXPLOIT: Multiset hash collision -- zkVM memory forgery
+//
+// A zkVM checks memory consistency via multiset hashing:
+//   write_digest = sum of MapToCurve(addr) for each write
+//   read_digest  = sum of MapToCurve(addr) for each read
+//   assert(write_digest == read_digest)
+//
+// The missing t < T check lets a malicious prover map m=6 to the
+// SAME group element as m=7 (using t=256). So the prover can
+// substitute address 6 for address 7 in the read log, and the
+// multiset digests still match.
+//
+// Write log: [m=7, m=1]  -- program writes to addresses 7 and 1
+// Read log:  [m=6, m=1]  -- attacker claims reads from 6 and 1
+//
+// The attacker proves m=6 maps to pt(7) using t=256.
+// Both digests are pt(7) + pt(1) -- they match.
+// Memory safety is violated: the read was for address 6, not 7.
+// ================================================================
+
+#[test]
+fn exploit_multiset_hash_collision() {
+    let x7: Field = 1792;
+    let y7: Field = 2222603532014808061213222263845635574143735707039159930479525957984581958699;
+    let z7: Field = 276759698173846535821495865193274967682377030871373817764620224677696820189;
+
+    let x1: Field = 256;
+    let y1: Field = 9189236229814196392576801464214343739846708746841839291083803335996532870109;
+    let z1: Field = 4477254854248242929434024226743979797109261084935875761478684308825718674401;
+
+    // --- HONEST WRITE LOG: [m=7, m=1] ---
+    let (w_dx, w_dy) = accumulate(x7, y7, 1, x1, y1, z1, 0);
+
+    // --- FORGED READ LOG: [m=6, m=1] ---
+    // Attacker uses t=256 to make m=6 map to the same point as m=7
+    // So the first element of the read log is pt(7), same as the write log
+    assert(check_map_to_curve_constraints(6, x7, y7, z7, 256));
+    let (r_dx, r_dy) = accumulate(x7, y7, 1, x1, y1, z1, 0);
+
+    // Digests match -- zkVM accepts the forged memory
+    assert(w_dx == r_dx);
+    assert(w_dy == r_dy);
+
+    // But the read was for address 6, not 7
+    assert(6 != 7);
+}
