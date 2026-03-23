@@ -1,0 +1,6 @@
+[workspace]
+members = ["non_native_field_ops", "noir_custom_hashes", 
+            "noir_map_to_curve", "native_noir_map_to_curve", "native_noir_poseidon_hash_to_curve",
+            "noir_poseidon_map_to_curve"
+            ]
+

@@ -1,0 +1,8 @@
+[package]
+name = "non_native_field_ops"
+type = "lib"
+authors = [""]
+compiler_version = ">=0.37.0"
+# compiler_version = ">=0.31.0"
+
+[dependencies]
