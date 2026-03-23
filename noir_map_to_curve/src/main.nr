@@ -1,8 +1,3 @@
-use dep::std::field::bn254;
-use dep::std::hash::poseidon;
-use dep::std::hash::blake2s;
-use dep::std::hash::blake3;
-use dep::std::hash::pedersen_hash;
 global T: Field = 256;
 
 fn check_map_to_curve_constraints(m: Field, x: Field, y: Field, z: Field, t: Field) -> bool {
@@ -36,31 +31,15 @@ fn check_map_to_curve_constraints(m: Field, x: Field, y: Field, z: Field, t: Fie
 
     let minus_one = Field::from(0) - Field::from(1);
     print(minus_one);
-    cond_1 * cond_2 * cond_3
+    cond_1 & cond_2 & cond_3
     
 }
 
-fn check_hash_constraints(m: Field, h: Field) -> bool {
-    
-    let cond_1 = std::hash::poseidon::bn254::hash_2([m, 0]) == h;
-    // let cond_1 = std::hash::pedersen_hash([m, 0]) == h;
-
-    cond_1
-}
-
-fn check_byte_hash_constraints(m: Field, h: [u8; 32]) -> bool {
-
-    // let cond_1 = std::hash::blake2s([m as u8]) == h;
-    let cond_1 = std::hash::blake3([m as u8]) == h;
-    cond_1
-}
 
 
 // #[field(bn254)]
 fn main(m: Field, x: Field, y: Field, z: Field, t: Field) {
     assert(check_map_to_curve_constraints(m, x, y, z, t));
-    // assert(check_hash_constraints(m, x));
-    // assert(check_byte_hash_constraints(m, [0; 32]));
 
 }
 
