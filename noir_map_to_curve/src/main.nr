@@ -121,3 +121,27 @@ fn exploit_automorphism() {
     // Messages are different
     assert(7 != m2);
 }
+
+// ================================================================
+// EXPLOIT: m=0 claims ANY valid curve point
+//
+// With m=0 the constraint becomes x == t + 0*256 = t.
+// Since t is unbounded, the attacker sets t = x for ANY valid x.
+// This means message m=0 can claim ownership of every curve point
+// in every message range -- a universal collision.
+// ================================================================
+
+#[test]
+fn exploit_zero_message_claims_any_point() {
+    let y: Field = 2222603532014808061213222263845635574143735707039159930479525957984581958699;
+    let z: Field = 276759698173846535821495865193274967682377030871373817764620224677696820189;
+
+    // Honest: m=7, t=0 -> x = 1792
+    assert(check_map_to_curve_constraints(7, 1792, y, z, 0));
+
+    // Forger: m=0, t=1792 -> x = 1792 + 0*256 = 1792
+    assert(check_map_to_curve_constraints(0, 1792, y, z, 1792));
+
+    // m=0 stole m=7's curve point
+    assert(0 != 7);
+}
