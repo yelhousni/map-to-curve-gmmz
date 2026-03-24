@@ -11,7 +11,7 @@ This fork adds concrete exploit tests demonstrating vulnerabilities in the const
 
 > **Y. El Housni and B. Bünz**, *On the Security of Constraint-Friendly Map-to-Curve Relations*, 2026.
 
-The exploits break **BLS unforgeability** (producing valid signatures on fresh messages without the secret key), following ElHousni--Bünz. Addtionally, the original implementations missed a range check which breaks **injectivity** (enabling multiset hash collisions and zkVM memory forgery) and 
+The exploits break **BLS unforgeability** (producing valid signatures on fresh messages without the secret key), following ElHousni--Bünz. Addtionally, the original implementations missed a range check which breaks **injectivity** (enabling multiset hash collisions and zkVM memory forgery).
 
 ## Code and paper correspondence
 
@@ -20,14 +20,14 @@ The exploits break **BLS unforgeability** (producing valid signatures on fresh m
 The core relation R_M2G is implemented in `check_map_to_curve_constraints` (`native_noir_map_to_curve/src/main.nr`). A triple `(m, (x, y), (k, z))` belongs to the relation if:
 
 1. `x = m * T + k` (x-increment embedding, `T = 256`)
-2. `y = z^2` (canonical y-selection via quadratic residuosity)
-3. `y^2 = x^3 - 17` (point lies on Grumpkin)
+2. `y = z^2` (canonical y-selection via quadratic residuosity for inverse exclusion)
+3. `y^2 = x^3 - 17` (point lies on Grumpkin curve)
 
 The paper proves injectivity and inverse exclusion when `k in [0, T)` and `q ≡ 3 (mod 4)` (Section 4.2). **However, the implementation does not enforce `k < T`.** The paper correctly states this condition but the circuit omits the range check, breaking injectivity (see Vulnerability 1 below).
 
 ### Nonnative field arithmetic (Section 7)
 
-The nonnative branch (`noir_map_to_curve/`), which was merged into the `main` branch in this fork, reimplements the same relation using 256-bit limb arithmetic (`FieldElement256`) over BN254 Fr, with the field library in `non_native_field_ops/src/lib.nr`. This is used for benchmarking native vs. nonnative constraint costs (Section 7): ~31 constraints (native) vs. ~3M constraints (nonnative). The nonnative circuit (`check_nonnative_map_to_curve_constraints`) has the same vulnerabilities as the native one, plus an additional `mul_mod_p` non-canonical reduction issue (see Vulnerability 6).
+The `nonnative` branch, which was merged into the `main` branch in this fork (in `noir_map_to_curve/`), reimplements the same relation using 256-bit limb arithmetic (`FieldElement256`) over BN254 Fr, with the field library in `non_native_field_ops/src/lib.nr`. This is used for benchmarking native vs. nonnative constraint costs (Section 7). The nonnative circuit (`check_nonnative_map_to_curve_constraints`) has the same vulnerabilities as the native one, plus an additional `mul_mod_p` non-canonical reduction issue (see Vulnerability 6).
 
 ### Concrete parameters (Sections 5.4 and 6.4)
 
@@ -35,7 +35,7 @@ The paper instantiates the construction with `T = 256`, message space `|M| <= 2^
 
 ### Relationship to the attack paper
 
-The BLS signature forgery (Vulnerabilities 3–5) corresponds to the automorphism-based attack described in ElHousni--Bünz. The missing `t < T` range check (Vulnerabilities 1–2) is a new finding specific to this implementation: the GMMZ paper correctly requires `k in [0, T)` in its formal definition (Fig. 2), but the Noir circuit never enforces this condition.
+The BLS signature forgery (Vulnerabilities 3–5) corresponds to the automorphism-based attack described in ElHousni-Bünz. The missing `t < T` range check (Vulnerabilities 1–2) is a new finding specific to this implementation: the GMMZ paper correctly requires `k in [0, T)` in its formal definition (Fig. 2), but the Noir circuit never enforces this condition.
 
 ## Vulnerabilities
 
@@ -59,9 +59,7 @@ phi(x, y) = (omega * x, y)
 
 where `omega = 4407920970296243842393367215006156084916469457145843978461` is a primitive cube root of unity in BN254 Fr. Since `omega^3 = 1`, we have `(omega * x)^3 = x^3`, so `phi(P)` is on the curve whenever `P` is.
 
-Starting from any valid witness `(m1, x1, y1, z1, t1)`, the forger computes `x2 = omega * x1` and decomposes it as `m2 * T + t2`. The witness `(m2, x2, y1, z1, t2)` passes all constraints.
-
-**This attack does not require `t >= T`.** It is purely algebraic and works even with a proper range check. The EC-GGM security proof (Theorems 3 and 5) does not account for this because `phi` is a degree-1 endomorphism that acts on x-coordinates without querying the group oracle.
+Starting from any valid witness `(m1, x1, y1, z1, t1)`, the forger computes `x2 = omega * x1` and decomposes it as `m2 * T + t2`. The witness `(m2, x2, y1, z1, t2)` passes all constraints since the  check `t < T` is not enforced.
 
 ### 4. BLS signature forgery
 
@@ -91,7 +89,7 @@ x2 = 1479467568817893190107042985963766170492104  (141 bits, m2 ~ 2^133)
 omega * x1 = x2 mod q
 ```
 
-This works because `T` is not range-checked, so `M * T >> sqrt(q)`, giving enough lattice vectors for some to land on the curve. For comparison, on BN254 G1 (`y^2 = x^3 + 3`), the polynomial short vector from Proposition 1 of the paper lands directly on the curve (O(1) forgery, `m1 ~ 2^119`, `m2 ~ 2^56`, `T = 128`). That attack is verified by the SageMath script `bn254_forgery.sage`.
+This works because `T` is not range-checked, so `M * T >> sqrt(q)`, giving enough lattice vectors for some to land on the curve. For comparison, on BN254 G1 (`y^2 = x^3 + 3`), the polynomial short vector lands directly on the curve (O(1) forgery, `m1 ~ 2^119`, `m2 ~ 2^56`, `T = 128`).
 
 ### 6. Nonnative-specific: `mul_mod_p` non-canonical reduction
 
